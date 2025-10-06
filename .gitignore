@@ -1,0 +1,10 @@
+**/*
+!.gitignore
+
+!config_template.ini
+!examples/**
+!spotqo_dl/**
+!install.sh
+!pyproject.toml
+!README.md
+!setup.py
