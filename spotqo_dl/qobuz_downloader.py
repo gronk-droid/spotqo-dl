@@ -137,8 +137,23 @@ class QobuzDownloader:
             
             # Take the first result (lucky approach)
             first_result = results[0]
-            result_artist = first_result.get('artist', '')
-            result_album = first_result.get('title', '')
+            
+            # Parse the text field to extract artist and album
+            text = first_result.get('text', '')
+            result_artist = ''
+            result_album = ''
+            
+            if text:
+                # The text format is typically: "Artist - Album - Duration [Quality]"
+                # Split by " - " and take the first two parts
+                parts = text.split(' - ')
+                if len(parts) >= 2:
+                    result_artist = parts[0].strip()
+                    result_album = parts[1].strip()
+                else:
+                    # Fallback: try to extract from the original query
+                    result_artist = artist
+                    result_album = album
             
             logger.info(f"Found album (lucky match): '{result_album}' by '{result_artist}'")
             return first_result
@@ -422,8 +437,23 @@ class QobuzDownloader:
             
             # Take the first result (lucky approach)
             first_result = results[0]
-            result_artist = first_result.get('artist', '')
-            result_title = first_result.get('title', '')
+            
+            # Parse the text field to extract artist and title
+            text = first_result.get('text', '')
+            result_artist = ''
+            result_title = ''
+            
+            if text:
+                # The text format is typically: "Artist - Title - Duration [Quality]"
+                # Split by " - " and take the first two parts
+                parts = text.split(' - ')
+                if len(parts) >= 2:
+                    result_artist = parts[0].strip()
+                    result_title = parts[1].strip()
+                else:
+                    # Fallback: try to extract from the original query
+                    result_artist = track['artist']
+                    result_title = track['name']
             
             logger.info(f"Found track (lucky match): '{result_title}' by '{result_artist}'")
             return first_result
