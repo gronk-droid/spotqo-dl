@@ -10,11 +10,18 @@ A command line tool that downloads Spotify tracks using Qobuz as the source.
 - Automatic metadata extraction and tagging
 - Support for multiple audio qualities (MP3, Lossless, Hi-Res)
 
+## Requirements
+- A Spotify developer project (free and easy to set up. see [here](https://developer.spotify.com/documentation/web-api/tutorials/getting-started).)
+- A Qobuz account
+- python>=3.10
+- [uv](https://github.com/astral-sh/uv)
+
 ## Installation
 
-```bash
-uv sync
-```
+1. Clone the repo
+2. Run `uv sync`
+3. Run install script with `./install.sh`
+   - Note: This will install it to the venv that uv makes, so it will only be available when that is activated.
 
 ## Setup
 
