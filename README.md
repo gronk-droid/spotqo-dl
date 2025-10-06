@@ -95,33 +95,3 @@ spotqo-dl -q 6 "https://open.spotify.com/track/..."
 # Enable verbose logging
 spotqo-dl -v "https://open.spotify.com/track/..."
 ```
-
-## Requirements
-
-- Python 3.10+
-- Spotify API credentials
-- Qobuz account with subscription
-- Internet connection
-
-## How It Works
-
-1. **Parse Spotify URL**: Extracts track, album, or playlist information from Spotify URLs
-2. **Search Qobuz**: Uses the extracted metadata to search for matching tracks on Qobuz
-3. **Download**: Downloads the high-quality audio files from Qobuz
-4. **Organize**: Saves files with proper metadata and folder structure
-
-## Troubleshooting
-
-### Common Issues
-
-1. **"Missing required configuration"**: Make sure you've set up your Spotify and Qobuz credentials
-2. **"Could not find track on Qobuz"**: The track might not be available on Qobuz, or the search didn't find a good match
-3. **Authentication errors**: Check your credentials and make sure your Qobuz account is active
-
-### Getting Help
-
-Run with `-v` flag for verbose logging to see detailed information about the download process.
-
-## License
-
-MIT License
