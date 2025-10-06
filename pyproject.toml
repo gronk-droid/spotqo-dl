@@ -1,0 +1,35 @@
+[project]
+name = "spotqo-dl"
+version = "0.1.0"
+description = "Download Spotify tracks using Qobuz as the source"
+authors = [{name = "spotqo-dl", email = "spotqo-dl@example.com"}]
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+
+dependencies = [
+    "spotipy>=2.24.0,<3",
+    "requests>=2.32.3,<3",
+    "click>=8.1.0,<9",
+    "rich>=13.9.4,<14",
+    "pathvalidate>=3.2.0,<4",
+    "mutagen>=1.47.0,<2",
+    "tqdm>=4.66.0,<5",
+    "beautifulsoup4>=4.12.3,<5",
+    "colorama>=0.4.6,<1",
+    "qobuz-dl>=0.9.0,<1",
+]
+
+[project.scripts]
+spotqo-dl = "spotqo_dl.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0,<9",
+    "black>=24.0.0,<25",
+    "isort>=5.13.0,<6",
+]
