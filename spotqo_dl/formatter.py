@@ -17,6 +17,8 @@ class TrackFormatter:
         "{artist}",
         "{artists}",
         "{album}",
+        "{album-base}",
+        "{album-version}",
         "{album-artist}",
         "{year}",
         "{track-number}",
@@ -33,6 +35,54 @@ class TrackFormatter:
     def __init__(self):
         """Initialize the formatter."""
         pass
+    
+    def _parse_album_version(self, album_name: str) -> tuple[str, str]:
+        """
+        Parse album name to extract base name and version.
+        
+        Args:
+            album_name: Full album name
+            
+        Returns:
+            Tuple of (base_album_name, version)
+        """
+        if not album_name:
+            return "", ""
+        
+        # Common version indicators
+        version_patterns = [
+            r'\s+\(Deluxe\)',
+            r'\s+\(Deluxe Edition\)',
+            r'\s+\(Extended\)',
+            r'\s+\(Extended Edition\)',
+            r'\s+\(Special Edition\)',
+            r'\s+\(Remastered\)',
+            r'\s+\(Remaster\)',
+            r'\s+\(Anniversary Edition\)',
+            r'\s+\(Collector\'s Edition\)',
+            r'\s+\(Limited Edition\)',
+            r'\s+\(Bonus Track Version\)',
+            r'\s+\(Explicit\)',
+            r'\s+\(Clean\)',
+            r'\s+\(Instrumental\)',
+            r'\s+\(Acoustic\)',
+            r'\s+\(Live\)',
+            r'\s+\(Studio\)',
+            r'\s+\(Original\)',
+            r'\s+\(Reissue\)',
+            r'\s+\(Re-release\)',
+        ]
+        
+        # Check for version patterns
+        for pattern in version_patterns:
+            match = re.search(pattern, album_name, re.IGNORECASE)
+            if match:
+                version = match.group(0).strip()
+                base_name = album_name[:match.start()].strip()
+                return base_name, version
+        
+        # If no version pattern found, return the original name as base
+        return album_name, ""
     
     def format_track(self, track: Dict[str, Any], template: str) -> str:
         """
@@ -60,12 +110,33 @@ class TrackFormatter:
             if isinstance(playlist_num, (int, float)):
                 formatted = formatted.replace("{playlist-number:02d}", f"{int(playlist_num):02d}")
         
+        # Parse album version information
+        album_name = track.get("album", "")
+        album_base, album_version = self._parse_album_version(album_name)
+        
+        # Clean up version string for filesystem use
+        if album_version:
+            # Remove parentheses and convert to lowercase
+            clean_version = album_version.strip('()').lower()
+            # Replace spaces with hyphens
+            clean_version = clean_version.replace(' ', '-')
+        else:
+            clean_version = ""
+        
+        # Create a clean album name for filesystem use
+        if clean_version:
+            clean_album_name = f"{album_base}-{clean_version}"
+        else:
+            clean_album_name = album_base
+        
         # Replace all variables
         replacements = {
             "{title}": track.get("name", ""),
             "{artist}": track.get("artist", ""),
             "{artists}": track.get("artist", ""),  # For compatibility
-            "{album}": track.get("album", ""),
+            "{album}": clean_album_name,
+            "{album-base}": album_base,
+            "{album-version}": clean_version,
             "{album-artist}": track.get("album_artist", track.get("artist", "")),
             "{year}": track.get("year", ""),
             "{track-number}": str(track.get("track_number", "")),
@@ -103,8 +174,8 @@ class TrackFormatter:
         # Replace spaces and underscores with hyphens
         filename = re.sub(r'[\s_]+', '-', filename)
         
-        # Remove special characters but keep hyphens and forward slashes
-        filename = re.sub(r'[^\w\-\/]', '', filename)
+        # Remove special characters but keep hyphens, forward slashes, and parentheses
+        filename = re.sub(r'[^\w\-\/\(\)]', '', filename)
         
         # Remove multiple consecutive hyphens
         filename = re.sub(r'-+', '-', filename)
