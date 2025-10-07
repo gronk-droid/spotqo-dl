@@ -21,6 +21,9 @@ class TrackFormatter:
         "{year}",
         "{track-number}",
         "{track-number:02d}",
+        "{playlist-title}",
+        "{playlist-number}",
+        "{playlist-number:02d}",
         "{duration}",
         "{isrc}",
         "{spotify-id}",
@@ -51,6 +54,12 @@ class TrackFormatter:
             if isinstance(track_num, (int, float)):
                 formatted = formatted.replace("{track-number:02d}", f"{int(track_num):02d}")
         
+        # Handle special formatting for playlist numbers
+        if "{playlist-number:02d}" in template:
+            playlist_num = track.get("playlist_number", 0)
+            if isinstance(playlist_num, (int, float)):
+                formatted = formatted.replace("{playlist-number:02d}", f"{int(playlist_num):02d}")
+        
         # Replace all variables
         replacements = {
             "{title}": track.get("name", ""),
@@ -60,6 +69,8 @@ class TrackFormatter:
             "{album-artist}": track.get("album_artist", track.get("artist", "")),
             "{year}": track.get("year", ""),
             "{track-number}": str(track.get("track_number", "")),
+            "{playlist-title}": track.get("playlist_title", ""),
+            "{playlist-number}": str(track.get("playlist_number", "")),
             "{duration}": str(track.get("duration", "")),
             "{isrc}": track.get("isrc", ""),
             "{spotify-id}": track.get("spotify_id", ""),
@@ -85,15 +96,15 @@ class TrackFormatter:
         # Convert to lowercase
         filename = filename.lower()
         
-        # Remove or replace invalid characters
-        invalid_chars = r'[<>:"/\\|?*]'
+        # Remove or replace invalid characters, but preserve forward slashes for directory separators
+        invalid_chars = r'[<>:"\\|?*]'
         filename = re.sub(invalid_chars, '', filename)
         
         # Replace spaces and underscores with hyphens
         filename = re.sub(r'[\s_]+', '-', filename)
         
-        # Remove special characters but keep hyphens
-        filename = re.sub(r'[^\w\-]', '', filename)
+        # Remove special characters but keep hyphens and forward slashes
+        filename = re.sub(r'[^\w\-\/]', '', filename)
         
         # Remove multiple consecutive hyphens
         filename = re.sub(r'-+', '-', filename)

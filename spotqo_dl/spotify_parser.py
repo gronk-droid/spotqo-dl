@@ -143,6 +143,12 @@ class SpotifyParser:
                 
                 results = self.client.next(results) if results["next"] else None
             
+            # Add playlist context to each track
+            playlist_name = playlist["name"]
+            for i, track in enumerate(tracks, 1):
+                track["playlist_title"] = playlist_name
+                track["playlist_number"] = i
+            
             return {
                 "type": "playlist",
                 "name": playlist["name"],
