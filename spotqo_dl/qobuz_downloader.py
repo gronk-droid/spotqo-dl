@@ -443,8 +443,14 @@ class QobuzDownloader:
                 folder_name = self.formatter.format_folder(track, self.folder_format)
                 new_filename = self.formatter.format_track(track, self.track_format)
             
-            # Create the new path
-            new_path = Path(self.output_dir) / folder_name / new_filename
+            # Check if we need to add disc folder for multi-disc albums
+            disc_number = track.get('disc_number', 1)
+            if disc_number > 1:
+                # Add disc folder for multi-disc albums
+                disc_folder = f"disc-{disc_number}"
+                new_path = Path(self.output_dir) / folder_name / disc_folder / new_filename
+            else:
+                new_path = Path(self.output_dir) / folder_name / new_filename
             
             # Create the directory if it doesn't exist
             new_path.parent.mkdir(parents=True, exist_ok=True)
@@ -464,7 +470,10 @@ class QobuzDownloader:
             for related_file in audio_file.parent.glob(f"{audio_file.stem}.*"):
                 if related_file != audio_file:
                     related_ext = related_file.suffix
-                    related_final = final_path.with_suffix(related_ext)
+                    if disc_number > 1:
+                        related_final = Path(self.output_dir) / folder_name / disc_folder / (new_filename + related_ext)
+                    else:
+                        related_final = Path(self.output_dir) / folder_name / (new_filename + related_ext)
                     shutil.move(str(related_file), str(related_final))
                     logger.info(f"Moved {related_file.name} to {related_final.name}")
             
@@ -739,8 +748,14 @@ class QobuzDownloader:
                             folder_name = self.formatter.format_folder(track_metadata, self.folder_format)
                             new_filename = self.formatter.format_track(track_metadata, self.track_format)
                         
-                        # Create the new path
-                        new_path = Path(self.output_dir) / folder_name / new_filename
+                        # Check if we need to add disc folder for multi-disc albums
+                        disc_number = track_metadata.get('disc_number', 1)
+                        if disc_number > 1:
+                            # Add disc folder for multi-disc albums
+                            disc_folder = f"disc-{disc_number}"
+                            new_path = Path(self.output_dir) / folder_name / disc_folder / new_filename
+                        else:
+                            new_path = Path(self.output_dir) / folder_name / new_filename
                         
                         # Create the directory if it doesn't exist
                         new_path.parent.mkdir(parents=True, exist_ok=True)
@@ -757,7 +772,10 @@ class QobuzDownloader:
                         for related_file in audio_file.parent.glob(f"{audio_file.stem}.*"):
                             if related_file != audio_file:
                                 related_ext = related_file.suffix
-                                related_final = final_path.with_suffix(related_ext)
+                                if disc_number > 1:
+                                    related_final = Path(self.output_dir) / folder_name / disc_folder / (new_filename + related_ext)
+                                else:
+                                    related_final = Path(self.output_dir) / folder_name / (new_filename + related_ext)
                                 shutil.move(str(related_file), str(related_final))
                                 logger.info(f"Moved {related_file.name} to {related_final.name}")
                     else:
@@ -798,7 +816,7 @@ class QobuzDownloader:
                 metadata = {}
                 
                 # Extract various metadata fields
-                tags = ['TITLE', 'ARTIST', 'ALBUM', 'TRACKNUMBER', 'DATE']
+                tags = ['TITLE', 'ARTIST', 'ALBUM', 'TRACKNUMBER', 'DISCNUMBER', 'DATE']
                 for tag in tags:
                     result = subprocess.run(['metaflac', f'--show-tag={tag}', str(audio_file)], 
                                           capture_output=True, text=True, check=False)
@@ -809,6 +827,11 @@ class QobuzDownloader:
                                 metadata['track_number'] = int(value)
                             except ValueError:
                                 metadata['track_number'] = 1
+                        elif tag == 'DISCNUMBER':
+                            try:
+                                metadata['disc_number'] = int(value)
+                            except ValueError:
+                                metadata['disc_number'] = 1
                         elif tag == 'DATE':
                             metadata['year'] = value[:4] if value else ''
                         else:
@@ -819,6 +842,7 @@ class QobuzDownloader:
                 metadata.setdefault('artist', 'Unknown Artist')
                 metadata.setdefault('album', 'Unknown Album')
                 metadata.setdefault('track_number', 1)
+                metadata.setdefault('disc_number', 1)
                 metadata.setdefault('year', '')
                 metadata.setdefault('duration', 0)
                 metadata.setdefault('isrc', '')

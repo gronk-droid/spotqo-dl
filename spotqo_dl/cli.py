@@ -38,7 +38,7 @@ def setup_logging(verbose: bool = False) -> None:
 
 
 @click.command()
-@click.argument('url', type=str)
+@click.argument('url', type=str, required=False)
 @click.option('--output', '-o', 'output_dir', 
               default='.',
               help='Output directory for downloads (default: current directory)')
@@ -65,15 +65,31 @@ def setup_logging(verbose: bool = False) -> None:
 @click.option('--folder-format',
               default='{artist} - {album} ({year})',
               help='Format string for folder naming')
-def main(url: str, output_dir: str, quality: str, verbose: bool, 
+@click.option('--tui', 'use_tui', is_flag=True,
+              help='Launch the interactive Terminal User Interface')
+def main(url: Optional[str], output_dir: str, quality: str, verbose: bool, 
          config: Optional[str], spotify_client_id: Optional[str],
          spotify_client_secret: Optional[str], qobuz_email: Optional[str],
-         qobuz_password: Optional[str], format: str, folder_format: str) -> None:
+         qobuz_password: Optional[str], format: str, folder_format: str, use_tui: bool) -> None:
     """
-    Download tracks using Qobuz as the source.
+    Download Spotify tracks using Qobuz as the source.
     
     URL can be a Spotify track, album, or playlist URL, or a Qobuz URL.
     """
+    
+    # If --tui flag is used, launch TUI
+    if use_tui:
+        from .tui import run_tui
+        run_tui()
+        return
+    
+    # If no URL provided, show help
+    if not url:
+        click.echo("Error: URL is required. Use --help for usage information.")
+        click.echo("For interactive mode, use: spotqo-dl --tui")
+        sys.exit(1)
+    
+    # Run the download logic
     setup_logging(verbose)
     logger = logging.getLogger(__name__)
     

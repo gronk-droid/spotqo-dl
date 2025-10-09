@@ -5,7 +5,7 @@ Based on spot-dl's formatter but simplified for our needs.
 
 import re
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 
 class TrackFormatter:
@@ -23,6 +23,8 @@ class TrackFormatter:
         "{year}",
         "{track-number}",
         "{track-number:02d}",
+        "{disc-number}",
+        "{disc-number:02d}",
         "{playlist-title}",
         "{playlist-number}",
         "{playlist-number:02d}",
@@ -104,6 +106,12 @@ class TrackFormatter:
             if isinstance(track_num, (int, float)):
                 formatted = formatted.replace("{track-number:02d}", f"{int(track_num):02d}")
         
+        # Handle special formatting for disc numbers
+        if "{disc-number:02d}" in template:
+            disc_num = track.get("disc_number", 1)
+            if isinstance(disc_num, (int, float)):
+                formatted = formatted.replace("{disc-number:02d}", f"{int(disc_num):02d}")
+        
         # Handle special formatting for playlist numbers
         if "{playlist-number:02d}" in template:
             playlist_num = track.get("playlist_number", 0)
@@ -129,30 +137,75 @@ class TrackFormatter:
         else:
             clean_album_name = album_base
         
-        # Replace all variables
+        # Sanitize individual field values before template replacement
+        # This prevents forward slashes in song titles from creating unwanted directories
+        def sanitize_field_value(value: str) -> str:
+            """Sanitize a single field value, removing forward slashes and other invalid chars."""
+            if not value:
+                return ""
+            # Remove forward slashes and other invalid characters from individual fields
+            sanitized = re.sub(r'[<>:"\\|?*/]', '', str(value))
+            # Replace spaces and underscores with hyphens
+            sanitized = re.sub(r'[\s_]+', '-', sanitized)
+            # Remove special characters but keep hyphens and parentheses
+            sanitized = re.sub(r'[^\w\-\()]', '', sanitized)
+            # Remove multiple consecutive hyphens
+            sanitized = re.sub(r'-+', '-', sanitized)
+            # Remove leading/trailing hyphens
+            sanitized = sanitized.strip('-')
+            return sanitized if sanitized else "untitled"
+        
+        # Replace all variables with sanitized values
         replacements = {
-            "{title}": track.get("name", ""),
-            "{artist}": track.get("artist", ""),
-            "{artists}": track.get("artist", ""),  # For compatibility
-            "{album}": clean_album_name,
-            "{album-base}": album_base,
-            "{album-version}": clean_version,
-            "{album-artist}": track.get("album_artist", track.get("artist", "")),
-            "{year}": track.get("year", ""),
-            "{track-number}": str(track.get("track_number", "")),
-            "{playlist-title}": track.get("playlist_title", ""),
-            "{playlist-number}": str(track.get("playlist_number", "")),
-            "{duration}": str(track.get("duration", "")),
-            "{isrc}": track.get("isrc", ""),
-            "{spotify-id}": track.get("spotify_id", ""),
-            "{spotify-url}": track.get("spotify_url", ""),
+            "{title}": sanitize_field_value(track.get("name", "")),
+            "{artist}": sanitize_field_value(track.get("artist", "")),
+            "{artists}": sanitize_field_value(track.get("artist", "")),  # For compatibility
+            "{album}": sanitize_field_value(clean_album_name),
+            "{album-base}": sanitize_field_value(album_base),
+            "{album-version}": sanitize_field_value(clean_version),
+            "{album-artist}": sanitize_field_value(track.get("album_artist", track.get("artist", ""))),
+            "{year}": sanitize_field_value(str(track.get("year", ""))),
+            "{track-number}": sanitize_field_value(str(track.get("track_number", ""))),
+            "{disc-number}": sanitize_field_value(str(track.get("disc_number", "1"))),
+            "{playlist-title}": sanitize_field_value(track.get("playlist_title", "")),
+            "{playlist-number}": sanitize_field_value(str(track.get("playlist_number", ""))),
+            "{duration}": sanitize_field_value(str(track.get("duration", ""))),
+            "{isrc}": sanitize_field_value(track.get("isrc", "")),
+            "{spotify-id}": sanitize_field_value(track.get("spotify_id", "")),
+            "{spotify-url}": sanitize_field_value(track.get("spotify_url", "")),
         }
         
         for var, value in replacements.items():
             if var in formatted:
                 formatted = formatted.replace(var, str(value))
         
-        return self._sanitize_filename(formatted)
+        # Final sanitization to handle any remaining issues and convert to lowercase
+        return self._final_sanitize(formatted)
+    
+    def _final_sanitize(self, filename: str) -> str:
+        """
+        Final sanitization step that converts to lowercase and handles any remaining issues.
+        
+        Args:
+            filename: Filename to sanitize
+            
+        Returns:
+            Sanitized filename
+        """
+        # Convert to lowercase
+        filename = filename.lower()
+        
+        # Remove multiple consecutive hyphens
+        filename = re.sub(r'-+', '-', filename)
+        
+        # Remove leading/trailing hyphens
+        filename = filename.strip('-')
+        
+        # Ensure filename is not empty
+        if not filename:
+            filename = "untitled"
+        
+        return filename
     
     def _sanitize_filename(self, filename: str) -> str:
         """
@@ -225,13 +278,8 @@ class TrackFormatter:
         Returns:
             Formatted folder name
         """
-        # Handle the specific case of "{artist}/{album}" format
-        if template == "{artist}/{album}":
-            artist = self._sanitize_filename(track.get("artist", ""))
-            album = self._sanitize_filename(track.get("album", ""))
-            return f"{artist}/{album}"
-        
-        # For other templates, use the regular formatting
+        # Use the same formatting logic as format_track, which now handles
+        # forward slashes in field values properly
         return self.format_track(track, template)
     
     def get_available_variables(self) -> list:
