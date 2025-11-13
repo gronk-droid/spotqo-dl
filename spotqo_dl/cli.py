@@ -16,6 +16,7 @@ from .spotify_parser import SpotifyParser
 from .qobuz_parser import QobuzParser
 from .qobuz_downloader import QobuzDownloader
 from .config import Config
+from .restructure import AudioFileRestructurer
 
 console = Console()
 
@@ -37,7 +38,8 @@ def setup_logging(verbose: bool = False) -> None:
     )
 
 
-@click.command()
+@click.group(invoke_without_command=True)
+@click.pass_context
 @click.argument('url', type=str, required=False)
 @click.option('--output', '-o', 'output_dir', 
               default='.',
@@ -67,7 +69,7 @@ def setup_logging(verbose: bool = False) -> None:
               help='Format string for folder naming')
 @click.option('--tui', 'use_tui', is_flag=True,
               help='Launch the interactive Terminal User Interface')
-def main(url: Optional[str], output_dir: str, quality: str, verbose: bool, 
+def main(ctx: click.Context, url: Optional[str], output_dir: str, quality: str, verbose: bool, 
          config: Optional[str], spotify_client_id: Optional[str],
          spotify_client_secret: Optional[str], qobuz_email: Optional[str],
          qobuz_password: Optional[str], format: str, folder_format: str, use_tui: bool) -> None:
@@ -76,6 +78,10 @@ def main(url: Optional[str], output_dir: str, quality: str, verbose: bool,
     
     URL can be a Spotify track, album, or playlist URL, or a Qobuz URL.
     """
+    
+    # If a subcommand was invoked, let it handle execution
+    if ctx.invoked_subcommand is not None:
+        return
     
     # If --tui flag is used, launch TUI
     if use_tui:
@@ -172,6 +178,52 @@ def main(url: Optional[str], output_dir: str, quality: str, verbose: bool,
         
     except KeyboardInterrupt:
         console.print("\n[yellow]Download interrupted by user[/yellow]")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+@main.command()
+@click.argument('directory', type=click.Path(exists=True, file_okay=False, dir_okay=True))
+@click.option('--format', '-f',
+              default='{track-number:02d} - {title}',
+              help='Format string for file naming (e.g., "{track-number:02d} - {title}")')
+@click.option('--folder-format',
+              default='{artist} - {album} ({year})',
+              help='Format string for folder naming')
+@click.option('--dry-run', '-n',
+              is_flag=True,
+              help='Show what would be done without making changes')
+@click.option('--verbose', '-v',
+              is_flag=True,
+              help='Enable verbose logging')
+def restructure(directory: str, format: str, folder_format: str, dry_run: bool, verbose: bool) -> None:
+    """
+    Restructure audio files in a directory using metadata.
+    
+    Recursively finds all .flac and .mp3 files in DIRECTORY, extracts their metadata,
+    and reorganizes them according to the specified format templates.
+    
+    Example:
+        spotqo-dl restructure /path/to/music --format "{track-number:02d} - {title}"
+    """
+    setup_logging(verbose)
+    logger = logging.getLogger(__name__)
+    
+    try:
+        console.print(f"[bold cyan]Audio File Restructurer[/bold cyan]\n")
+        
+        restructurer = AudioFileRestructurer(
+            track_format=format,
+            folder_format=folder_format
+        )
+        
+        restructurer.restructure_files(directory, dry_run=dry_run)
+        
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Restructuring interrupted by user[/yellow]")
         sys.exit(1)
     except Exception as e:
         logger.error(f"Error: {e}")

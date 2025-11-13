@@ -9,6 +9,7 @@ A command line tool that downloads Spotify tracks using Qobuz as the source.
 - Command line interface with rich output
 - Automatic metadata extraction and tagging
 - Support for multiple audio qualities (MP3, Lossless, Hi-Res)
+- Restructure existing audio files using metadata
 
 ## Requirements
 - A Spotify developer project (free and easy to set up. see [here](https://developer.spotify.com/documentation/web-api/tutorials/getting-started).)
@@ -94,4 +95,62 @@ spotqo-dl -q 6 "https://open.spotify.com/track/..."
 
 # Enable verbose logging
 spotqo-dl -v "https://open.spotify.com/track/..."
+```
+
+### Restructuring Existing Files
+
+The `restructure` command allows you to reorganize existing audio files (FLAC and MP3) based on their metadata:
+
+```bash
+# Restructure files in a directory
+spotqo-dl restructure /path/to/music
+
+# Preview changes without making them (dry run)
+spotqo-dl restructure /path/to/music --dry-run
+
+# Custom format templates
+spotqo-dl restructure /path/to/music \
+  --format "{track-number:02d} - {title}" \
+  --folder-format "{artist} - {album} ({year})"
+```
+
+#### How it works:
+
+1. **Scans recursively** for all `.flac` and `.mp3` files in the specified directory
+2. **Extracts metadata** from each file using embedded tags (artist, album, year, track number, disc number, etc.)
+3. **Displays a summary** of found files grouped by album
+4. **Prompts for confirmation** - you can verify the metadata is correct or manually edit it
+5. **Restructures files** according to the format templates
+6. **Handles multi-disc albums** by creating `disc-1`, `disc-2`, etc. subdirectories when needed
+7. **Cleans up** empty directories after restructuring
+
+#### Format Variables:
+
+Available variables for `--format` and `--folder-format`:
+- `{title}` - Track title
+- `{artist}` - Track artist
+- `{album}` - Album name
+- `{album-artist}` - Album artist
+- `{year}` - Release year
+- `{track-number}` or `{track-number:02d}` - Track number (with optional zero-padding)
+- `{disc-number}` or `{disc-number:02d}` - Disc number (with optional zero-padding)
+
+#### Example:
+
+```bash
+# Before:
+/music/
+  random-song-1.flac
+  random-song-2.flac
+  subfolder/
+    another-song.mp3
+
+# After running: spotqo-dl restructure /music
+/music/
+  artist-name-album-name-2024/
+    01-track-title.flac
+    02-another-track.flac
+  another-artist-different-album-2023/
+    disc-1/
+      01-song-title.mp3
 ```
