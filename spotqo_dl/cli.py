@@ -40,7 +40,22 @@ def setup_logging(verbose: bool = False) -> None:
 
 @click.group(invoke_without_command=True)
 @click.pass_context
-@click.argument('url', type=str, required=False)
+def main(ctx: click.Context) -> None:
+    """
+    spotqo-dl - Download Spotify tracks using Qobuz as the source.
+    
+    Use 'spotqo-dl download' to download tracks or 'spotqo-dl restructure' to reorganize existing files.
+    """
+    # If a subcommand was invoked, let it handle execution
+    if ctx.invoked_subcommand is not None:
+        return
+    
+    # If no subcommand, show help
+    click.echo(ctx.get_help())
+
+
+@main.command()
+@click.argument('url', type=str)
 @click.option('--output', '-o', 'output_dir', 
               default='.',
               help='Output directory for downloads (default: current directory)')
@@ -69,7 +84,7 @@ def setup_logging(verbose: bool = False) -> None:
               help='Format string for folder naming')
 @click.option('--tui', 'use_tui', is_flag=True,
               help='Launch the interactive Terminal User Interface')
-def main(ctx: click.Context, url: Optional[str], output_dir: str, quality: str, verbose: bool, 
+def download(url: str, output_dir: str, quality: str, verbose: bool, 
          config: Optional[str], spotify_client_id: Optional[str],
          spotify_client_secret: Optional[str], qobuz_email: Optional[str],
          qobuz_password: Optional[str], format: str, folder_format: str, use_tui: bool) -> None:
@@ -79,21 +94,11 @@ def main(ctx: click.Context, url: Optional[str], output_dir: str, quality: str, 
     URL can be a Spotify track, album, or playlist URL, or a Qobuz URL.
     """
     
-    # If a subcommand was invoked, let it handle execution
-    if ctx.invoked_subcommand is not None:
-        return
-    
     # If --tui flag is used, launch TUI
     if use_tui:
         from .tui import run_tui
         run_tui()
         return
-    
-    # If no URL provided, show help
-    if not url:
-        click.echo("Error: URL is required. Use --help for usage information.")
-        click.echo("For interactive mode, use: spotqo-dl --tui")
-        sys.exit(1)
     
     # Run the download logic
     setup_logging(verbose)

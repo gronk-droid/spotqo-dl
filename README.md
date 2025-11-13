@@ -75,26 +75,26 @@ password = your_qobuz_password
 
 ```bash
 # Download a single track
-spotqo-dl "https://open.spotify.com/track/4iV5W9uYEdYUVa79Axb7Rh"
+spotqo-dl download "https://open.spotify.com/track/4iV5W9uYEdYUVa79Axb7Rh"
 
 # Download an album
-spotqo-dl "https://open.spotify.com/album/1DFixLWuPkv3KT3TnVXm4o"
+spotqo-dl download "https://open.spotify.com/album/1DFixLWuPkv3KT3TnVXm4o"
 
 # Download a playlist
-spotqo-dl "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
+spotqo-dl download "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
 ```
 
 ### Advanced Options
 
 ```bash
 # Specify output directory
-spotqo-dl -o ./my_music "https://open.spotify.com/track/..."
+spotqo-dl download -o ./my_music "https://open.spotify.com/track/..."
 
 # Choose quality (5=MP3, 6=Lossless, 7=Hi-res <96kHz, 27=Hi-res >96kHz)
-spotqo-dl -q 6 "https://open.spotify.com/track/..."
+spotqo-dl download -q 6 "https://open.spotify.com/track/..."
 
 # Enable verbose logging
-spotqo-dl -v "https://open.spotify.com/track/..."
+spotqo-dl download -v "https://open.spotify.com/track/..."
 ```
 
 ### Restructuring Existing Files
