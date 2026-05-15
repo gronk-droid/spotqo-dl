@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from qobuz_dl.core import QobuzDL
+from qobuz_dl.exceptions import AuthenticationError
 from .formatter import TrackFormatter
+from .utils import titles_match as _titles_match
 
 logger = logging.getLogger(__name__)
 
@@ -32,27 +34,56 @@ class QobuzDownloader:
         self.cache_dir = Path(output_dir) / ".spotqo_cache"
         self.cache_dir.mkdir(exist_ok=True)
         
+        # Maps spotify_id → final output path; populated by _rename_single_file()
+        self._downloaded_file_paths: Dict[str, Path] = {}
+        
     @property
     def qobuz_dl(self) -> QobuzDL:
         """Get QobuzDL instance, initializing if needed."""
         if self._qobuz_dl is None:
-            self._qobuz_dl = QobuzDL(
-                directory=str(self.cache_dir),  # Use cache directory for downloads
+            instance = QobuzDL(
+                directory=str(self.cache_dir),
                 quality=self.quality,
                 embed_art=True,
                 no_cover=False,
                 quality_fallback=True
             )
-            
-            # Get tokens and initialize client
-            self._qobuz_dl.get_tokens()
-            self._qobuz_dl.initialize_client(self.email, self.password, 
-                                           self._qobuz_dl.app_id, self._qobuz_dl.secrets)
+            try:
+                instance.get_tokens()
+                instance.initialize_client(self.email, self.password,
+                                           instance.app_id, instance.secrets)
+            except AuthenticationError as exc:
+                config_path = "~/.config/spotqo-dl/config.ini"
+                raise AuthenticationError(
+                    f"Qobuz authentication failed.\n"
+                    f"Qobuz no longer accepts email/password login via the API.\n"
+                    f"You need to store a user_auth_token as the 'password' in {config_path}.\n\n"
+                    "How to get your token:\n"
+                    "  1. Log into play.qobuz.com in Firefox or Chrome\n"
+                    "  2. Open DevTools (F12) → Network tab\n"
+                    "  3. Play any track — a POST to 'user/login' will appear\n"
+                    "  4. Click that request → Response tab → copy 'user_auth_token'\n"
+                    "     (In Chrome/Safari you can also find it under\n"
+                    "      Application → Local Storage → play.qobuz.com → 'localuser')\n"
+                    f"  5. Open {config_path} and set:\n"
+                    "        [qobuz]\n"
+                    "        email    = your@email.com\n"
+                    "        password = <paste the long token here>"
+                ) from exc
+            self._qobuz_dl = instance
         return self._qobuz_dl
     
     def download_tracks(self, tracks: List[Dict[str, Any]]) -> None:
         """
         Download tracks by first finding the album on Qobuz, then downloading individual tracks.
+        
+        Tracks are grouped by (album_artist, album) so that multi-artist playlists are handled
+        correctly: each album group is searched and downloaded independently rather than letting
+        the most-common-artist heuristic apply to the whole batch.
+
+        Successfully downloaded tracks are recorded in ``self._downloaded_file_paths``
+        (keyed by spotify_id) so that the caller can detect which tracks were missed and
+        generate a merged playlist after optionally running a Tidal fallback.
         
         Args:
             tracks: List of track dictionaries with metadata
@@ -63,29 +94,35 @@ class QobuzDownloader:
             logger.warning("No tracks to download")
             return
         
-        # Extract album information
-        album_info = self._extract_album_context(tracks)
-        logger.info(f"Looking for album: {album_info.get('expected_artist')} - {album_info.get('expected_album')}")
+        # Group by (album_artist, album) so multi-artist playlists are handled correctly.
+        # Each group is then processed as its own album unit.
+        from collections import defaultdict
+        groups: Dict[tuple, List[Dict[str, Any]]] = defaultdict(list)
+        for track in tracks:
+            artist_key = track.get('album_artist') or track.get('artist', '')
+            album_key = track.get('album', '')
+            groups[(artist_key, album_key)].append(track)
         
-        # First, try to find the entire album on Qobuz
-        qobuz_album = self._search_album(album_info)
-        if qobuz_album:
-            logger.info(f"Found album on Qobuz: {qobuz_album.get('title', 'Unknown')}")
-            # Download tracks from the found album
-            downloaded_tracks = self._download_album_tracks(qobuz_album, tracks)
+        logger.info(f"Grouped {len(tracks)} tracks into {len(groups)} album group(s)")
+        
+        for (artist, album_name), group_tracks in groups.items():
+            logger.info(f"Looking for album: {artist} - {album_name}")
+            album_info = self._extract_album_context(group_tracks)
             
-            # Check if any tracks were not downloaded from the album
-            if downloaded_tracks is not None and len(downloaded_tracks) < len(tracks):
-                # Find tracks that weren't successfully processed
-                downloaded_spotify_ids = {track.get('spotify_id') for track in downloaded_tracks}
-                missing_tracks = [track for track in tracks if track.get('spotify_id') not in downloaded_spotify_ids]
-                logger.info(f"Some tracks were not found in the album. Trying individual search for {len(missing_tracks)} remaining tracks...")
-                self._download_tracks_individually(missing_tracks)
-        else:
-            logger.warning(f"Could not find album '{album_info.get('expected_album')}' by '{album_info.get('expected_artist')}' on Qobuz")
-            # Fallback to individual track search
-            logger.info("Falling back to individual track search...")
-            self._download_tracks_individually(tracks)
+            qobuz_album = self._search_album(album_info)
+            if qobuz_album:
+                logger.info(f"Found album on Qobuz: {qobuz_album.get('title', 'Unknown')}")
+                downloaded_tracks = self._download_album_tracks(qobuz_album, group_tracks)
+                
+                if downloaded_tracks is not None and len(downloaded_tracks) < len(group_tracks):
+                    downloaded_spotify_ids = {t.get('spotify_id') for t in downloaded_tracks}
+                    missing_tracks = [t for t in group_tracks if t.get('spotify_id') not in downloaded_spotify_ids]
+                    logger.info(f"Some tracks were not found in the album. Trying individual search for {len(missing_tracks)} remaining tracks...")
+                    self._download_tracks_individually(missing_tracks)
+            else:
+                logger.warning(f"Could not find album '{album_name}' by '{artist}' on Qobuz")
+                logger.info("Falling back to individual track search...")
+                self._download_tracks_individually(group_tracks)
     
     def download_qobuz_url(self, url: str) -> None:
         """
@@ -230,7 +267,12 @@ class QobuzDownloader:
     
     def _rename_album_files(self, spotify_tracks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Rename all downloaded album files using Spotify metadata.
+        Rename downloaded album files using Spotify metadata.
+        
+        Scans ALL files in the cache (not just the top-N by mtime) to allow correct matching
+        when the downloaded album contains more tracks than the requested subset.  Each Spotify
+        track ID can only be matched once, and the positional fallback is limited to tracks that
+        were not already title-matched, so surplus album files are never incorrectly renamed.
         
         Args:
             spotify_tracks: Original tracks from Spotify
@@ -244,37 +286,38 @@ class QobuzDownloader:
             downloaded_files = []
             
             for ext in audio_extensions:
-                pattern = f"*{ext}"
-                downloaded_files.extend(self.cache_dir.rglob(pattern))
+                downloaded_files.extend(self.cache_dir.rglob(f"*{ext}"))
             
             if not downloaded_files:
                 logger.warning("No audio files found to rename")
                 return []
             
-            # Sort by modification time to get the most recent files
+            # Sort by modification time (newest first) for deterministic ordering
             downloaded_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
             
-            # Match downloaded files to Spotify tracks by content
-            recent_files = downloaded_files[:len(spotify_tracks)]
-            
-            # Try to match files by reading their metadata first
+            # Scan ALL downloaded files for title matches — do not cap at len(spotify_tracks).
+            # An album download may contain more tracks than the requested subset.
             matched_files = []
             unmatched_files = []
+            matched_spotify_ids: set = set()
             successfully_processed = []
             
-            for audio_file in recent_files:
+            import subprocess
+            for audio_file in downloaded_files:
                 matched = False
                 try:
-                    # Try to read the original metadata to match with Spotify tracks
-                    import subprocess
-                    result = subprocess.run(['metaflac', '--show-tag=TITLE', str(audio_file)], 
-                                          capture_output=True, text=True, check=False)
+                    result = subprocess.run(
+                        ['metaflac', '--show-tag=TITLE', str(audio_file)],
+                        capture_output=True, text=True, check=False,
+                    )
                     if result.returncode == 0 and result.stdout.strip():
                         original_title = result.stdout.strip().replace('TITLE=', '')
-                        # Try to find matching Spotify track by title similarity
                         for track in spotify_tracks:
-                            if self._titles_match(original_title, track.get('name', '')):
+                            sid = track.get('spotify_id')
+                            if sid not in matched_spotify_ids and \
+                               self._titles_match(original_title, track.get('name', '')):
                                 matched_files.append((audio_file, track))
+                                matched_spotify_ids.add(sid)
                                 matched = True
                                 break
                 except Exception:
@@ -283,20 +326,22 @@ class QobuzDownloader:
                 if not matched:
                     unmatched_files.append(audio_file)
             
-            # Process matched files
+            # Rename title-matched files
             for audio_file, track in matched_files:
                 self._rename_single_file(audio_file, track)
                 successfully_processed.append(track)
             
-            # Process unmatched files by position (fallback)
-            sorted_spotify_tracks = sorted(spotify_tracks, key=lambda x: x.get('track_number', 0))
+            # Positional fallback — only for Spotify tracks that were NOT already matched.
+            # Surplus downloaded files (extra album tracks not in the playlist) are skipped.
+            unmatched_tracks = sorted(
+                [t for t in spotify_tracks if t.get('spotify_id') not in matched_spotify_ids],
+                key=lambda x: x.get('track_number', 0),
+            )
             for i, audio_file in enumerate(unmatched_files):
-                if i < len(sorted_spotify_tracks):
-                    track = sorted_spotify_tracks[i]
-                else:
-                    track = spotify_tracks[0] if spotify_tracks else {}
-                self._rename_single_file(audio_file, track)
-                successfully_processed.append(track)
+                if i < len(unmatched_tracks):
+                    self._rename_single_file(audio_file, unmatched_tracks[i])
+                    successfully_processed.append(unmatched_tracks[i])
+                # else: extra album file not in our playlist — leave for cache cleanup
             
             # Clean up cache directory after processing
             self._cleanup_cache()
@@ -309,28 +354,8 @@ class QobuzDownloader:
             return []
     
     def _titles_match(self, title1: str, title2: str) -> bool:
-        """
-        Check if two track titles match (case-insensitive, normalized).
-        
-        Args:
-            title1: First title to compare
-            title2: Second title to compare
-            
-        Returns:
-            True if titles match, False otherwise
-        """
-        if not title1 or not title2:
-            return False
-        
-        # Normalize titles: lowercase, remove extra spaces, remove punctuation
-        import re
-        normalize = lambda t: re.sub(r'[^\w\s]', '', t.lower().strip())
-        
-        norm1 = normalize(title1)
-        norm2 = normalize(title2)
-        
-        # Check for exact match or if one is contained in the other
-        return norm1 == norm2 or norm1 in norm2 or norm2 in norm1
+        """Delegate to the shared titles_match helper."""
+        return _titles_match(title1, title2)
     
     def _validate_track_match(self, qobuz_track: Dict[str, Any], spotify_track: Dict[str, Any]) -> bool:
         """
@@ -423,13 +448,16 @@ class QobuzDownloader:
             logger.error(f"Error validating album match: {e}")
             return False
     
-    def _rename_single_file(self, audio_file: Path, track: Dict[str, Any]) -> None:
+    def _rename_single_file(self, audio_file: Path, track: Dict[str, Any]) -> Optional[Path]:
         """
         Rename a single audio file using track metadata.
         
         Args:
             audio_file: Path to the audio file
             track: Track metadata from Spotify
+            
+        Returns:
+            The final Path the file was moved to, or None on error.
         """
         try:
             # Parse the format string to extract folder and file parts
@@ -463,6 +491,11 @@ class QobuzDownloader:
             shutil.move(str(audio_file), str(final_path))
             logger.info(f"Renamed {audio_file.name} to {final_path.name}")
             
+            # Record the output path keyed by spotify_id for m3u generation
+            spotify_id = track.get('spotify_id')
+            if spotify_id:
+                self._downloaded_file_paths[spotify_id] = final_path
+            
             # Update metadata tags to match Spotify track order
             self._update_metadata_tags(final_path, track)
             
@@ -484,9 +517,12 @@ class QobuzDownloader:
                     logger.debug(f"Removed empty directory: {audio_file.parent}")
             except OSError:
                 pass  # Directory not empty or other error, ignore
+            
+            return final_path
                 
         except Exception as e:
             logger.error(f"Error renaming file {audio_file.name}: {e}")
+            return None
     
     def _update_metadata_tags(self, audio_file: Path, track: Dict[str, Any]) -> None:
         """
@@ -646,64 +682,33 @@ class QobuzDownloader:
     
     def _rename_downloaded_files(self, track: Dict[str, Any]) -> None:
         """
-        Rename downloaded files using Spotify metadata and format strings.
+        Rename the most recently downloaded file using Spotify metadata.
+        
+        Delegates to _rename_single_file() so that the output path is recorded
+        in _downloaded_file_paths and appears in any generated m3u playlist.
         
         Args:
             track: Track metadata from Spotify
         """
         try:
-            # Find the most recently downloaded files in the cache directory
             audio_extensions = ['.mp3', '.flac', '.m4a', '.wav']
             downloaded_files = []
             
             for ext in audio_extensions:
-                pattern = f"*{ext}"
-                downloaded_files.extend(self.cache_dir.rglob(pattern))
+                downloaded_files.extend(self.cache_dir.rglob(f"*{ext}"))
             
             if not downloaded_files:
                 logger.warning(f"No audio files found to rename for {track['name']}")
                 return
             
-            # Sort by modification time to get the most recent files
+            # Pick the most recently modified file — the one we just downloaded
             downloaded_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-            
-            # Get the most recent audio file (likely the one we just downloaded)
             audio_file = downloaded_files[0]
             
-            # Parse the format string to extract folder and file parts
-            if "/" in self.track_format:
-                # Split the format string into folder and file parts
-                folder_part, file_part = self.track_format.rsplit("/", 1)
-                folder_name = self.formatter.format_folder(track, folder_part)
-                new_filename = self.formatter.format_track(track, file_part)
-            else:
-                # Use the default folder format and the track format as filename
-                folder_name = self.formatter.format_folder(track, self.folder_format)
-                new_filename = self.formatter.format_track(track, self.track_format)
+            # Delegate to _rename_single_file so the path is tracked for m3u generation
+            self._rename_single_file(audio_file, track)
             
-            # Create the new path
-            new_path = Path(self.output_dir) / folder_name / new_filename
-            
-            # Create the directory if it doesn't exist
-            new_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Determine the correct extension
-            ext = audio_file.suffix
-            final_path = new_path.with_suffix(ext)
-            
-            # Move and rename the audio file
-            shutil.move(str(audio_file), str(final_path))
-            logger.info(f"Renamed {audio_file.name} to {final_path.name}")
-            
-            # Also move any associated files (cover art, etc.)
-            for related_file in audio_file.parent.glob(f"{audio_file.stem}.*"):
-                if related_file != audio_file:
-                    related_ext = related_file.suffix
-                    related_final = final_path.with_suffix(related_ext)
-                    shutil.move(str(related_file), str(related_final))
-                    logger.info(f"Moved {related_file.name} to {related_final.name}")
-            
-            # Clean up cache directory after processing
+            # Clean up any remaining cache files
             self._cleanup_cache()
             
         except Exception as e:
