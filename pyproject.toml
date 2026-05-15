@@ -5,7 +5,7 @@ description = "Download Spotify tracks using Qobuz as the source"
 authors = [{name = "spotqo-dl", email = "spotqo-dl@example.com"}]
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.13"
 
 dependencies = [
     "spotipy>=2.24.0,<3",
@@ -19,6 +19,7 @@ dependencies = [
     "colorama>=0.4.6,<1",
     "qobuz-dl>=0.9.0,<1",
     "textual>=0.45.0,<1",
+    "tiddl>=3.0.0,<4",
 ]
 
 [project.scripts]
