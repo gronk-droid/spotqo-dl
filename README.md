@@ -1,21 +1,24 @@
 # spotqo-dl
 
-A command line tool that downloads Spotify tracks using Qobuz as the source.
+A command line tool that downloads Spotify tracks using Qobuz as the primary source, with automatic Tidal fallback. Direct Qobuz and Tidal URLs are also supported.
 
 ## Features
 
 - Download Spotify tracks, albums, and playlists
 - Uses Qobuz for high-quality audio downloads
+- Automatic Tidal fallback when Qobuz cannot find a track
+- Direct Qobuz and Tidal URL downloads
 - Command line interface with rich output
 - Automatic metadata extraction and tagging
-- Support for multiple audio qualities (MP3, Lossless, Hi-Res)
+- Support for multiple audio qualities (MP3, Lossless, Hi-Res, Master)
 - Restructure existing audio files using metadata
 
 ## Requirements
 - A Spotify developer project (free and easy to set up. see [here](https://developer.spotify.com/documentation/web-api/tutorials/getting-started).)
 - A Qobuz account
-- python>=3.10
+- python>=3.13
 - [uv](https://github.com/astral-sh/uv)
+- [ffmpeg](https://ffmpeg.org/download.html) (required by tiddl for Tidal downloads)
 
 ## Installation
 
@@ -38,7 +41,17 @@ Before using spotqo-dl, you need to set up your credentials:
 
 You need a Qobuz account with a subscription to download tracks.
 
-### 3. Configure Credentials
+### 3. Tidal Account (optional — for fallback and direct Tidal downloads)
+
+Tidal authentication is handled entirely by [tiddl](https://github.com/oskvr37/tiddl). Run once:
+
+```bash
+tiddl auth login
+```
+
+Follow the on-screen instructions to log in via your browser. spotqo-dl reads the resulting session token from `~/.tiddl/config.toml` automatically — no additional config is required. If Tidal is not authenticated, spotqo-dl will still work for Qobuz and Spotify downloads; the fallback is simply skipped.
+
+### 4. Configure Credentials
 
 You can set up credentials in three ways:
 
@@ -74,14 +87,21 @@ password = your_qobuz_password
 ### Basic Usage
 
 ```bash
-# Download a single track
+# Download a single track (Spotify)
 spotqo-dl download "https://open.spotify.com/track/4iV5W9uYEdYUVa79Axb7Rh"
 
-# Download an album
+# Download an album (Spotify)
 spotqo-dl download "https://open.spotify.com/album/1DFixLWuPkv3KT3TnVXm4o"
 
-# Download a playlist
+# Download a playlist (Spotify)
 spotqo-dl download "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
+
+# Download directly from a Tidal URL
+spotqo-dl download "https://listen.tidal.com/album/103805723"
+spotqo-dl download "https://tidal.com/browse/track/103805726"
+
+# Download directly from a Qobuz URL
+spotqo-dl download "https://www.qobuz.com/us-en/album/..."
 ```
 
 ### Advanced Options
@@ -90,12 +110,25 @@ spotqo-dl download "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
 # Specify output directory
 spotqo-dl download -o ./my_music "https://open.spotify.com/track/..."
 
-# Choose quality (5=MP3, 6=Lossless, 7=Hi-res <96kHz, 27=Hi-res >96kHz)
+# Choose Qobuz quality (5=MP3, 6=Lossless, 7=Hi-res <96kHz, 27=Hi-res >96kHz)
 spotqo-dl download -q 6 "https://open.spotify.com/track/..."
+
+# Choose Tidal quality for fallback or direct Tidal downloads
+# (LOW=96kbps, HIGH=320kbps, LOSSLESS=16-bit FLAC, HI_RES_LOSSLESS=up to 24-bit FLAC)
+spotqo-dl download --tidal-quality HI_RES_LOSSLESS "https://listen.tidal.com/album/..."
+
+# Disable automatic Tidal fallback for Spotify URLs (Qobuz-only)
+spotqo-dl download --no-tidal-fallback "https://open.spotify.com/album/..."
 
 # Enable verbose logging
 spotqo-dl download -v "https://open.spotify.com/track/..."
 ```
+
+### Tidal Fallback Behavior
+
+When downloading Spotify URLs, spotqo-dl first searches Qobuz for each album. If Qobuz cannot find a track, spotqo-dl automatically searches Tidal and downloads from there instead. Both sources use the same file-naming format, so your library stays consistently organized. A playlist `.m3u` file merges tracks from both sources in the correct order.
+
+To disable Tidal fallback, pass `--no-tidal-fallback`. If Tidal is not authenticated, fallback is silently skipped.
 
 ### Restructuring Existing Files
 
