@@ -179,6 +179,51 @@ def _maybe_write_m3u(
     )
 
 
+def _apply_replaygain(
+    qobuz_downloader: QobuzDownloader,
+    tidal_downloader: Optional[TidalDownloader],
+    target: float,
+    album_gain: bool,
+    prevent_clipping: bool,
+    jobs: int,
+) -> None:
+    """Run loudness analysis over all files downloaded this session."""
+    from .loudness import LoudnessProcessor
+
+    session_files: list[Path] = []
+    session_files.extend(qobuz_downloader._session_files)
+    if tidal_downloader is not None:
+        session_files.extend(tidal_downloader._session_files)
+
+    # Deduplicate while preserving order.
+    seen: set[Path] = set()
+    unique_files = []
+    for path in session_files:
+        if path not in seen and path.exists():
+            seen.add(path)
+            unique_files.append(path)
+
+    if not unique_files:
+        return
+
+    console.print(
+        f"\n[bold cyan]Applying ReplayGain to {len(unique_files)} "
+        f"track(s) (target {target:g} LUFS)...[/bold cyan]"
+    )
+    try:
+        processor = LoudnessProcessor(
+            target=target,
+            album_mode=album_gain,
+            prevent_clipping=prevent_clipping,
+            jobs=jobs,
+            console=console,
+        )
+        tagged = processor.process_files(unique_files)
+        console.print(f"[green]ReplayGain tagged {tagged} track(s).[/green]")
+    except Exception as exc:  # noqa: BLE001 - normalization is non-fatal
+        console.print(f"[yellow]ReplayGain step failed: {exc}[/yellow]")
+
+
 @main.command()
 @click.argument("urls", nargs=-1, required=True)
 @click.option(
@@ -230,6 +275,21 @@ def _maybe_write_m3u(
     help="Format string for folder naming",
 )
 @click.option(
+    "--replaygain/--no-replaygain",
+    "replaygain",
+    default=None,
+    help=(
+        "Analyze and tag downloaded tracks with ReplayGain loudness values "
+        "(overrides the [loudness] config section)"
+    ),
+)
+@click.option(
+    "--rg-target",
+    type=float,
+    default=None,
+    help="ReplayGain reference loudness in LUFS (default: -18.0)",
+)
+@click.option(
     "--tui",
     "use_tui",
     is_flag=True,
@@ -249,6 +309,8 @@ def download(
     qobuz_password: Optional[str],
     format: str,
     folder_format: str,
+    replaygain: Optional[bool],
+    rg_target: Optional[float],
     use_tui: bool,
 ) -> None:
     """
@@ -282,6 +344,14 @@ def download(
             config_manager.qobuz_email = qobuz_email
         if qobuz_password:
             config_manager.qobuz_password = qobuz_password
+
+        # Resolve ReplayGain settings: CLI flags override the config file.
+        rg_enabled = (
+            replaygain if replaygain is not None else config_manager.loudness_enabled
+        )
+        rg_reference = (
+            rg_target if rg_target is not None else config_manager.loudness_target
+        )
 
         has_spotify_urls = any(
             not is_qobuz_url(u) and not is_tidal_url(u) for u in urls
@@ -424,6 +494,18 @@ def download(
             if not success:
                 failed_urls.append(url)
 
+        # ReplayGain: analyze the whole session at once so album gain can be
+        # computed per album folder.
+        if rg_enabled:
+            _apply_replaygain(
+                qobuz_downloader=qobuz_downloader,
+                tidal_downloader=tidal_downloader,
+                target=rg_reference,
+                album_gain=config_manager.loudness_album_gain,
+                prevent_clipping=config_manager.loudness_prevent_clipping,
+                jobs=config_manager.loudness_jobs,
+            )
+
         console.print()
         succeeded = total - len(failed_urls)
         if not failed_urls:
@@ -505,6 +587,250 @@ def restructure(
 
     except KeyboardInterrupt:
         console.print("\n[yellow]Restructuring interrupted by user[/yellow]")
+        sys.exit(1)
+    except Exception as exc:
+        logger.error(f"Error: {exc}")
+        console.print(f"[red]Error: {exc}[/red]")
+        sys.exit(1)
+
+
+@main.command()
+@click.argument(
+    "directory",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+)
+@click.option(
+    "--target",
+    "-t",
+    type=float,
+    default=-18.0,
+    show_default=True,
+    help="Reference loudness in LUFS (-18 = ReplayGain 2.0, -14 = streaming)",
+)
+@click.option(
+    "--album/--no-album",
+    "album_mode",
+    default=True,
+    show_default=True,
+    help="Also compute per-album gain (one gated measurement per folder)",
+)
+@click.option(
+    "--prevent-clipping/--allow-clipping",
+    "prevent_clipping",
+    default=True,
+    show_default=True,
+    help="Reduce gain when it would push the true peak above -1 dBTP",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Re-tag files that already carry ReplayGain tags",
+)
+@click.option(
+    "--jobs",
+    "-j",
+    type=int,
+    default=4,
+    show_default=True,
+    help="Number of files to analyze in parallel",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show measured loudness and computed gain without writing tags",
+)
+@click.option(
+    "--verbose", "-v", is_flag=True, help="Enable verbose logging"
+)
+def normalize(
+    directory: str,
+    target: float,
+    album_mode: bool,
+    prevent_clipping: bool,
+    force: bool,
+    jobs: int,
+    dry_run: bool,
+    verbose: bool,
+) -> None:
+    """
+    Analyze audio files and write ReplayGain loudness tags (non-destructive).
+
+    Recursively finds all .flac, .mp3, .m4a and .wav files in DIRECTORY,
+    measures each file's loudness with ffmpeg's EBU R128 scanner, and writes
+    ReplayGain 2.0 gain/peak tags.  The audio samples are never modified; a
+    ReplayGain-aware player uses the tags to even out volume at playback.
+
+    Works on files from any source (Tidal, Qobuz, Soulseek, CD rips, ...).
+
+    Example:
+        spotqo-dl normalize /path/to/music --target -18
+    """
+    setup_logging(verbose)
+    logger = logging.getLogger(__name__)
+
+    try:
+        from .loudness import LoudnessProcessor
+
+        console.print("[bold cyan]Loudness Normalization (ReplayGain)[/bold cyan]\n")
+
+        processor = LoudnessProcessor(
+            target=target,
+            album_mode=album_mode,
+            prevent_clipping=prevent_clipping,
+            force=force,
+            jobs=jobs,
+            dry_run=dry_run,
+            console=console,
+        )
+        tagged = processor.process_directory(directory)
+
+        if dry_run:
+            console.print(
+                "\n[yellow]Dry run - no tags were written.[/yellow]"
+            )
+        else:
+            console.print(
+                f"\n[bold green]Tagged {tagged} file(s) with ReplayGain.[/bold green]"
+            )
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Normalization interrupted by user[/yellow]")
+        sys.exit(1)
+    except Exception as exc:
+        logger.error(f"Error: {exc}")
+        console.print(f"[red]Error: {exc}[/red]")
+        sys.exit(1)
+
+
+@main.command(name="normalize-export")
+@click.argument(
+    "source",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+)
+@click.argument(
+    "dest",
+    type=click.Path(file_okay=False, dir_okay=True),
+)
+@click.option(
+    "--target",
+    "-t",
+    type=float,
+    default=-18.0,
+    show_default=True,
+    help="Reference loudness in LUFS to normalize to",
+)
+@click.option(
+    "--prevent-clipping/--allow-clipping",
+    "prevent_clipping",
+    default=True,
+    show_default=True,
+    help="Reduce gain when it would push the true peak above -1 dBTP",
+)
+@click.option(
+    "--jobs",
+    "-j",
+    type=int,
+    default=4,
+    show_default=True,
+    help="Number of files to process in parallel",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show what would be exported without writing files",
+)
+@click.option(
+    "--verbose", "-v", is_flag=True, help="Enable verbose logging"
+)
+def normalize_export(
+    source: str,
+    dest: str,
+    target: float,
+    prevent_clipping: bool,
+    jobs: int,
+    dry_run: bool,
+    verbose: bool,
+) -> None:
+    """
+    Write gain-applied lossless copies for players that ignore ReplayGain tags.
+
+    Recursively finds lossless files (.flac, .wav) under SOURCE, bakes the
+    loudness gain into fresh FLAC copies under DEST (mirroring the directory
+    layout, with dither), and copies tags and cover art.  The originals are
+    never modified.  Use this for DAPs, car stereos, or other hardware that
+    does not honor ReplayGain tags; for everything else prefer `normalize`.
+
+    Example:
+        spotqo-dl normalize-export /music /music-normalized --target -18
+    """
+    setup_logging(verbose)
+    logger = logging.getLogger(__name__)
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    try:
+        from .loudness import (
+            LOSSLESS_EXTENSIONS,
+            export_with_gain,
+        )
+
+        console.print("[bold cyan]Loudness Export (baked gain)[/bold cyan]\n")
+
+        source_path = Path(source)
+        dest_path = Path(dest)
+
+        files: list[Path] = []
+        for ext in LOSSLESS_EXTENSIONS:
+            files.extend(source_path.rglob(f"*{ext}"))
+        files = sorted(files)
+
+        if not files:
+            console.print(
+                f"[yellow]No lossless files (.flac/.wav) found in {source}[/yellow]"
+            )
+            return
+
+        console.print(
+            f"Exporting {len(files)} file(s) to {dest_path} "
+            f"(target {target:g} LUFS)\n"
+        )
+
+        def _export_one(src_file: Path) -> tuple[Path, bool, str]:
+            rel = src_file.relative_to(source_path)
+            out = dest_path / rel
+            if dry_run:
+                return src_file, True, f"would export -> {rel.with_suffix('.flac')}"
+            try:
+                result = export_with_gain(
+                    src_file,
+                    out,
+                    target_lufs=target,
+                    prevent_clipping=prevent_clipping,
+                )
+                return src_file, True, f"exported -> {result.relative_to(dest_path)}"
+            except Exception as exc:  # noqa: BLE001
+                return src_file, False, str(exc)
+
+        exported = 0
+        with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+            for src_file, ok, message in pool.map(_export_one, files):
+                if ok:
+                    exported += 1
+                    console.print(f"  [green]{src_file.name}[/green]: {message}")
+                else:
+                    console.print(f"  [red]{src_file.name}[/red]: {message}")
+
+        if dry_run:
+            console.print("\n[yellow]Dry run - no files were written.[/yellow]")
+        else:
+            console.print(
+                f"\n[bold green]Exported {exported} file(s) to {dest_path}.[/bold green]"
+            )
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Export interrupted by user[/yellow]")
         sys.exit(1)
     except Exception as exc:
         logger.error(f"Error: {exc}")
