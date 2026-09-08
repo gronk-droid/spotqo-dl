@@ -121,6 +121,10 @@ class TidalDownloader:
         # so the CLI can merge registries for combined m3u generation.
         self._downloaded_file_paths: Dict[str, Path] = {}
 
+        # Every file finalized this session, for post-download loudness
+        # normalization (captures direct-URL downloads with no spotify_id too).
+        self._session_files: List[Path] = []
+
     # ------------------------------------------------------------------
     # Auth / API
     # ------------------------------------------------------------------
@@ -158,7 +162,10 @@ class TidalDownloader:
                 )
                 if downloaded_path:
                     track_dict = self._tidal_to_dict(track_obj, album_obj)
-                    self._move_to_output(downloaded_path, track_dict)
+                    final_path = self._move_to_output(downloaded_path, track_dict)
+                    if final_path:
+                        self._write_metadata(final_path, track_obj, album_obj)
+                        self._session_files.append(final_path)
                 else:
                     logger.warning(
                         f"Tidal download returned no path for: {track_obj.title}"
@@ -206,6 +213,17 @@ class TidalDownloader:
 
                 final_path = self._move_to_output(downloaded_path, track)
                 if final_path:
+                    album_obj = None
+                    try:
+                        album_obj = self.api.get_album(tidal_track.album.id)
+                    except Exception as exc:
+                        logger.warning(
+                            f"[Tidal fallback] Could not fetch album for "
+                            f"metadata ({label}): {exc}"
+                        )
+                    self._write_metadata(final_path, tidal_track, album_obj)
+                    self._session_files.append(final_path)
+
                     sid = track.get("spotify_id")
                     if sid:
                         self._downloaded_file_paths[sid] = final_path
@@ -401,6 +419,58 @@ class TidalDownloader:
         except Exception as exc:
             logger.error(f"Error moving Tidal file {cache_path}: {exc}")
             return None
+
+    # ------------------------------------------------------------------
+    # Internal helpers — metadata / cover art
+    # ------------------------------------------------------------------
+
+    def _write_metadata(self, path: Path, track: Any, album: Any) -> None:
+        """
+        Embed tags and cover art into a downloaded Tidal file.
+
+        Reuses tiddl's own metadata writers so the FLAC/M4A gets TITLE,
+        ARTIST, ALBUMARTIST, ALBUM, TRACKNUMBER, DISCNUMBER, DATE, ISRC and
+        an embedded front-cover picture.  Failures here are non-fatal: the
+        file was already downloaded and renamed successfully.
+        """
+        try:
+            from tiddl.core.metadata import add_track_metadata, Cover
+
+            cover_uid = album.cover if album else None
+            if not cover_uid and getattr(track, "album", None):
+                cover_uid = track.album.cover
+
+            cover_data = None
+            if cover_uid:
+                try:
+                    cover_data = Cover(cover_uid).fetch_data() or None
+                except Exception as exc:
+                    logger.warning(
+                        f"Could not fetch Tidal cover art for {path.name}: {exc}"
+                    )
+
+            if album and album.artist:
+                album_artist = album.artist.name
+            elif track.artist:
+                album_artist = track.artist.name
+            else:
+                album_artist = ""
+
+            date = ""
+            if album and album.releaseDate:
+                date = str(album.releaseDate)
+
+            add_track_metadata(
+                path=path,
+                track=track,
+                album_artist=album_artist,
+                cover_data=cover_data,
+                date=date,
+            )
+            logger.debug(f"Wrote metadata for {path.name}")
+
+        except Exception as exc:
+            logger.warning(f"Could not write metadata for {path.name}: {exc}")
 
     # ------------------------------------------------------------------
     # Cache cleanup
