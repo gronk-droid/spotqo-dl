@@ -36,6 +36,11 @@ class QobuzDownloader:
         
         # Maps spotify_id → final output path; populated by _rename_single_file()
         self._downloaded_file_paths: Dict[str, Path] = {}
+
+        # Every file finalized this session (any source path), for post-download
+        # loudness normalization.  Unlike _downloaded_file_paths this also
+        # captures direct-URL downloads that have no spotify_id.
+        self._session_files: List[Path] = []
         
     @property
     def qobuz_dl(self) -> QobuzDL:
@@ -498,6 +503,9 @@ class QobuzDownloader:
             
             # Update metadata tags to match Spotify track order
             self._update_metadata_tags(final_path, track)
+
+            # Record for post-download loudness normalization
+            self._session_files.append(final_path)
             
             # Also move any associated files (cover art, etc.)
             for related_file in audio_file.parent.glob(f"{audio_file.stem}.*"):
@@ -772,6 +780,9 @@ class QobuzDownloader:
                         # Move and rename the audio file
                         shutil.move(str(audio_file), str(final_path))
                         logger.info(f"Renamed {audio_file.name} to {final_path.name}")
+
+                        # Record for post-download loudness normalization
+                        self._session_files.append(final_path)
                         
                         # Also move any associated files (cover art, etc.)
                         for related_file in audio_file.parent.glob(f"{audio_file.stem}.*"):
@@ -789,6 +800,7 @@ class QobuzDownloader:
                         new_path.parent.mkdir(parents=True, exist_ok=True)
                         shutil.move(str(audio_file), str(new_path))
                         logger.info(f"Moved {audio_file.name} to {new_path}")
+                        self._session_files.append(new_path)
                         
                 except Exception as e:
                     logger.error(f"Error processing file {audio_file.name}: {e}")
