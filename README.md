@@ -12,13 +12,15 @@ A command line tool that downloads Spotify tracks using Qobuz as the primary sou
 - Automatic metadata extraction and tagging
 - Support for multiple audio qualities (MP3, Lossless, Hi-Res, Master)
 - Restructure existing audio files using metadata
+- Non-destructive loudness normalization (ReplayGain 2.0 / EBU R128) so tracks
+  from different sources play back at a consistent volume
 
 ## Requirements
 - A Spotify developer project (free and easy to set up. see [here](https://developer.spotify.com/documentation/web-api/tutorials/getting-started).)
 - A Qobuz account
 - python>=3.13
 - [uv](https://github.com/astral-sh/uv)
-- [ffmpeg](https://ffmpeg.org/download.html) (required by tiddl for Tidal downloads)
+- [ffmpeg](https://ffmpeg.org/download.html) (required by tiddl for Tidal downloads, and by the loudness normalization commands)
 
 ## Installation
 
@@ -187,3 +189,101 @@ Available variables for `--format` and `--folder-format`:
     disc-1/
       01-song-title.mp3
 ```
+
+### Loudness Normalization (ReplayGain)
+
+Different sources ship different masters of the same recording, so a Tidal FLAC
+can play back several dB quieter (or louder) than the Qobuz version of the same
+album. That forces you to keep riding the volume knob as tracks change.
+
+spotqo-dl fixes this the way audiophile players expect: it measures each file's
+loudness with ffmpeg's EBU R128 scanner and writes **ReplayGain 2.0** gain/peak
+tags. The audio samples are never touched — a ReplayGain-aware player reads the
+tags and adjusts the volume at playback, so the process is completely reversible
+(delete the tags and the file is byte-for-byte the original). The reference
+level is -18 LUFS by default (the ReplayGain 2.0 standard).
+
+This works on files from **any** source — Tidal, Qobuz, Soulseek, CD rips,
+Bandcamp — not just spotqo-dl downloads.
+
+#### Normalize an existing library
+
+```bash
+# Analyze and tag every .flac/.mp3/.m4a/.wav under the directory
+spotqo-dl normalize /path/to/music
+
+# Preview measured loudness and computed gain without writing anything
+spotqo-dl normalize /path/to/music --dry-run
+
+# Use the -14 LUFS streaming reference instead of -18
+spotqo-dl normalize /path/to/music --target -14
+
+# Re-tag files that already have ReplayGain tags
+spotqo-dl normalize /path/to/music --force
+```
+
+Options:
+- `--target/-t` — reference loudness in LUFS (default `-18.0`)
+- `--album/--no-album` — also compute per-album gain (one gated measurement per
+  folder) so album playback keeps the relative dynamics between tracks (default on)
+- `--prevent-clipping/--allow-clipping` — reduce a track's gain if applying it
+  would push the true peak above -1 dBTP (default on)
+- `--force` — re-tag files that already carry ReplayGain tags
+- `--jobs/-j` — number of files to analyze in parallel (default 4)
+- `--dry-run/-n` — show what would happen without writing tags
+
+#### Normalize on download
+
+Pass `--replaygain` to tag tracks as they finish downloading:
+
+```bash
+spotqo-dl download --replaygain "https://open.spotify.com/album/..."
+spotqo-dl download --replaygain --rg-target -14 "https://listen.tidal.com/album/..."
+```
+
+Or enable it permanently in `~/.config/spotqo-dl/config.ini`:
+
+```ini
+[loudness]
+enabled = true
+target = -18.0
+album_gain = true
+prevent_clipping = true
+jobs = 4
+```
+
+CLI flags always override the config file.
+
+#### Enabling ReplayGain in your player
+
+ReplayGain tags are inert until the player is told to use them. Common setups:
+
+| Player | How to enable |
+|--------|---------------|
+| mpd | Add `replaygain "track"` (or `"album"`) to `mpd.conf` |
+| mpv | `--replaygain=track` (or add `replaygain=track` to `mpv.conf`) |
+| VLC | Preferences -> Audio -> "Replay gain mode" = Track |
+| foobar2000 | Playback -> ReplayGain -> "Apply gain (with limiting)" |
+| Rockbox / iPods | Settings -> Playback -> ReplayGain -> On |
+| Navidrome | Set `ReplayGain` in the web UI player settings |
+| Plex / Jellyfin | Enable "Loudness normalization" / "Audio normalization" in playback settings |
+| Symfonium / Audirvana | Enable ReplayGain in their audio/DSP settings |
+
+#### For players that ignore ReplayGain (DAPs, car stereos)
+
+Some hardware never reads ReplayGain tags. For those, `normalize-export` bakes
+the gain directly into fresh **lossless** copies (with dither), leaving your
+originals untouched:
+
+```bash
+# Write gain-applied FLAC copies to a parallel tree
+spotqo-dl normalize-export /music /music-normalized
+
+# Preview without writing
+spotqo-dl normalize-export /music /music-normalized --dry-run
+```
+
+The output mirrors the source directory layout, tags and cover art are copied
+over, and the ReplayGain tags are stripped from the copies (with a marker) so
+nothing double-applies gain later. Only lossless inputs (`.flac`, `.wav`) are
+accepted; for lossy files use the tag-based `normalize` command instead.
