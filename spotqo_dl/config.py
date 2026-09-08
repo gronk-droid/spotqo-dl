@@ -17,6 +17,13 @@ class Config:
         self.spotify_client_secret: Optional[str] = None
         self.qobuz_email: Optional[str] = None
         self.qobuz_password: Optional[str] = None
+
+        # Loudness / ReplayGain preferences (see [loudness] in config.ini).
+        self.loudness_enabled: bool = False
+        self.loudness_target: float = -18.0
+        self.loudness_album_gain: bool = True
+        self.loudness_prevent_clipping: bool = True
+        self.loudness_jobs: int = 4
         
     def _get_default_config_path(self) -> str:
         """Get the default configuration file path."""
@@ -48,6 +55,24 @@ class Config:
             if "qobuz" in config:
                 self.qobuz_email = self.qobuz_email or config["qobuz"].get("email")
                 self.qobuz_password = self.qobuz_password or config["qobuz"].get("password")
+
+            if "loudness" in config:
+                section = config["loudness"]
+                self.loudness_enabled = section.getboolean(
+                    "enabled", fallback=self.loudness_enabled
+                )
+                self.loudness_target = section.getfloat(
+                    "target", fallback=self.loudness_target
+                )
+                self.loudness_album_gain = section.getboolean(
+                    "album_gain", fallback=self.loudness_album_gain
+                )
+                self.loudness_prevent_clipping = section.getboolean(
+                    "prevent_clipping", fallback=self.loudness_prevent_clipping
+                )
+                self.loudness_jobs = section.getint(
+                    "jobs", fallback=self.loudness_jobs
+                )
     
     def is_valid(self) -> bool:
         """Check if all required configuration is present."""
